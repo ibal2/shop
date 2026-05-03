@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🛍️ ShopCid — Boutique E-commerce
 
 > Développé par **Ibrahim Tembely alias Cid**
@@ -65,3 +66,6 @@ Voir [`docs/DEPLOIEMENT.md`](docs/DEPLOIEMENT.md)
 ---
 
 *Développé par **Ibrahim Tembely alias Cid***
+=======
+# shop
+>>>>>>> 89f63ceef169364b8709b3712ecd11ea448d670d
