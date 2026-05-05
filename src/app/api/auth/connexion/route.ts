@@ -18,7 +18,11 @@ export async function POST(req: NextRequest) {
     if (!validatePhone(telephone))
       return NextResponse.json({ error: 'Numéro invalide' }, { status: 400 })
 
-    const client = await queryOne<any>('SELECT * FROM clients WHERE telephone = ? AND est_actif = 1', [sanitize(telephone)])
+    // db.ts convertit automatiquement "= 1" en "= TRUE" pour PostgreSQL
+    const client = await queryOne<any>(
+      'SELECT * FROM clients WHERE telephone = ? AND est_actif = 1',
+      [sanitize(telephone)]
+    )
     const valid = client && await verifyPassword(mot_de_passe, client.mot_de_passe)
 
     if (!valid) {
