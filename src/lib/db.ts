@@ -1,30 +1,57 @@
-/**
- * Couche base de données universelle
- * LOCAL  → SQLite via @libsql/client
- * PROD   → PostgreSQL via pg
- *
- * Gère automatiquement les différences SQLite/PostgreSQL :
- * - Placeholders ? → $1, $2...
- * - Booléens 1/0 → TRUE/FALSE
- * - datetime('now') → NOW()
- */
-
 const IS_PROD = process.env.NODE_ENV === 'production'
 
 function serialize<T>(rows: any[]): T[] {
   return JSON.parse(JSON.stringify(rows)) as T[]
 }
 
-// Adapte le SQL SQLite → PostgreSQL automatiquement
+// Convertit le SQL SQLite → PostgreSQL
 function adaptSql(sql: string): string {
   let i = 0
   return sql
-    .replace(/\?/g, () => `$${++i}`)                          // placeholders
-    .replace(/= 1\b/g, '= TRUE')                              // est_actif = 1
-    .replace(/= 0\b/g, '= FALSE')                             // est_actif = 0
-    .replace(/datetime\('now'\)/g, 'NOW()')                   // dates
-    .replace(/est_actif\s*=\s*TRUE/g, 'est_actif = TRUE')
-    .replace(/est_active\s*=\s*TRUE/g, 'est_active = TRUE')
+    // Placeholders ? → $1, $2...
+    .replace(/\?/g, () => `$${++i}`)
+    // datetime SQLite → NOW() PostgreSQL
+    .replace(/datetime\('now'\)/g, 'NOW()')
+    // Gestion des booléens dans WHERE
+    .replace(/(\w+)\s*=\s*1\b/g, (match, col) => {
+      const boolCols = ['est_actif', 'est_active', 'est_vedette', 'lue']
+      return boolCols.includes(col) ? `${col} = TRUE` : match
+    })
+    .replace(/(\w+)\s*=\s*0\b/g, (match, col) => {
+      const boolCols = ['est_actif', 'est_active', 'est_vedette', 'lue']
+      return boolCols.includes(col) ? `${col} = FALSE` : match
+    })
+}
+
+// Convertit les valeurs 0/1 en TRUE/FALSE pour les colonnes booléennes
+function adaptParams(sql: string, params: any[]): any[] {
+  if (!IS_PROD) return params
+  const boolCols = ['est_actif', 'est_active', 'est_vedette', 'lue']
+  // Trouver les colonnes dans le SQL (INSERT ou UPDATE)
+  const colMatches = sql.match(/\b(est_actif|est_active|est_vedette|lue)\b/g) || []
+  if (colMatches.length === 0) return params
+
+  // Pour INSERT: convertir les params correspondants
+  if (/^\s*INSERT/i.test(sql)) {
+    const colsMatch = sql.match(/\(([^)]+)\)\s*VALUES/i)
+    if (colsMatch) {
+      const cols = colsMatch[1].split(',').map(c => c.trim())
+      return params.map((p, idx) => {
+        if (boolCols.includes(cols[idx]) && (p === 0 || p === 1)) {
+          return p === 1
+        }
+        return p
+      })
+    }
+  }
+
+  // Pour UPDATE: convertir les valeurs 0/1 qui suivent les colonnes booléennes
+  return params.map(p => {
+    if ((p === 0 || p === 1) && colMatches.length > 0) {
+      return p === 1 ? true : false
+    }
+    return p
+  })
 }
 
 // ─── PostgreSQL ───────────────────────────────────────────────────────────────
@@ -62,7 +89,9 @@ async function getSqliteClient() {
 export async function query<T = any>(sql: string, params: any[] = []): Promise<T[]> {
   try {
     if (IS_PROD) {
-      const { rows } = await getPgPool().query(adaptSql(sql), params)
+      const adapted = adaptSql(sql)
+      const adaptedParams = adaptParams(sql, params)
+      const { rows } = await getPgPool().query(adapted, adaptedParams)
       return serialize<T>(rows)
     } else {
       const client = await getSqliteClient()
@@ -84,8 +113,9 @@ export async function execute(sql: string, params: any[] = []): Promise<{ lastIn
   try {
     if (IS_PROD) {
       const adapted = adaptSql(sql)
+      const adaptedParams = adaptParams(sql, params)
       const pgSql = /^\s*INSERT/i.test(sql) ? adapted + ' RETURNING id' : adapted
-      const res = await getPgPool().query(pgSql, params)
+      const res = await getPgPool().query(pgSql, adaptedParams)
       return { lastInsertRowid: res.rows?.[0]?.id, changes: res.rowCount ?? 0 }
     } else {
       const client = await getSqliteClient()
