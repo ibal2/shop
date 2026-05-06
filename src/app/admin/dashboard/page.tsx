@@ -3,28 +3,48 @@ import { queryOne, query } from '@/lib/db'
 import { TrendingUp, Clock, CheckCircle, Users, Package } from 'lucide-react'
 import Link from 'next/link'
 
+const IS_PROD = process.env.NODE_ENV === 'production'
+
 export default async function DashboardPage() {
   let stats: any = { attente: 0, validees: 0, ca: 0, clients: 0, produits: 0 }
   let recentes: any[] = []
+
   try {
+    // Requête stats — gère SQLite et PostgreSQL
     stats = await queryOne<any>(`
       SELECT
         (SELECT COUNT(*) FROM commandes WHERE statut='en_attente') as attente,
         (SELECT COUNT(*) FROM commandes WHERE statut='validée') as validees,
         (SELECT COALESCE(SUM(montant_total),0) FROM commandes WHERE statut='validée') as ca,
         (SELECT COUNT(*) FROM clients) as clients,
-        (SELECT COUNT(*) FROM produits WHERE est_actif=1) as produits
+        (SELECT COUNT(*) FROM produits WHERE est_actif = ${IS_PROD ? 'TRUE' : '1'}) as produits
     `) || stats
-    recentes = await query<any>(`
-      SELECT c.*,
-        COALESCE(cl.nom, c.nom_invite) as nom,
-        COALESCE(cl.prenom, c.prenom_invite) as prenom,
-        GROUP_CONCAT(lg.nom_produit, ', ') as articles
-      FROM commandes c
-      LEFT JOIN clients cl ON c.client_id = cl.id
-      LEFT JOIN commande_lignes lg ON c.id = lg.commande_id
-      GROUP BY c.id ORDER BY c.id DESC LIMIT 5
-    `)
+
+    // GROUP_CONCAT (SQLite) vs STRING_AGG (PostgreSQL)
+    if (IS_PROD) {
+      recentes = await query<any>(`
+        SELECT c.*,
+          COALESCE(cl.nom, c.nom_invite) as nom,
+          COALESCE(cl.prenom, c.prenom_invite) as prenom,
+          STRING_AGG(lg.nom_produit, ', ') as articles
+        FROM commandes c
+        LEFT JOIN clients cl ON c.client_id = cl.id
+        LEFT JOIN commande_lignes lg ON c.id = lg.commande_id
+        GROUP BY c.id, cl.nom, cl.prenom, c.nom_invite, c.prenom_invite
+        ORDER BY c.id DESC LIMIT 5
+      `)
+    } else {
+      recentes = await query<any>(`
+        SELECT c.*,
+          COALESCE(cl.nom, c.nom_invite) as nom,
+          COALESCE(cl.prenom, c.prenom_invite) as prenom,
+          GROUP_CONCAT(lg.nom_produit, ', ') as articles
+        FROM commandes c
+        LEFT JOIN clients cl ON c.client_id = cl.id
+        LEFT JOIN commande_lignes lg ON c.id = lg.commande_id
+        GROUP BY c.id ORDER BY c.id DESC LIMIT 5
+      `)
+    }
   } catch(e) { console.error(e) }
 
   const cards = [
@@ -43,7 +63,6 @@ export default async function DashboardPage() {
           <p className="text-white/40 text-xs mt-0.5">Vue d'ensemble de votre boutique</p>
         </div>
 
-        {/* KPIs — 2 colonnes mobile, 5 desktop */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3">
           {cards.map(({ icon: Icon, label, value, color, bg, href }) => (
             <Link key={label} href={href} className={`glass rounded-2xl border p-4 hover:scale-[1.02] transition-all duration-300 ${bg}`}>
@@ -54,14 +73,11 @@ export default async function DashboardPage() {
           ))}
         </div>
 
-        {/* Commandes récentes */}
         <div className="glass rounded-2xl border border-white/5 overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-white/5">
             <h2 className="text-white font-semibold text-sm">Commandes récentes</h2>
             <Link href="/admin/commandes" className="text-orange-400 text-xs hover:text-orange-300 transition-colors">Voir tout →</Link>
           </div>
-
-          {/* Table desktop */}
           <div className="overflow-x-auto hidden sm:block">
             <table className="admin-table">
               <thead><tr><th>N°</th><th>Client</th><th>Montant</th><th>Statut</th><th>Date</th></tr></thead>
@@ -80,8 +96,6 @@ export default async function DashboardPage() {
               </tbody>
             </table>
           </div>
-
-          {/* Liste mobile */}
           <div className="sm:hidden divide-y divide-white/5">
             {recentes.length === 0
               ? <div className="text-center py-8 text-white/30 text-sm">Aucune commande</div>
